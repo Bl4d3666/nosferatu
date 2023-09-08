@@ -1,0 +1,45 @@
+trigger:
+- master
+
+pool:
+  vmImage: 'windows-2019'
+
+variables:
+- group: DetaVariableGroup
+- group:  BuildVariablesGroup
+
+steps:
+
+- task: CMake@1
+  displayName: 'CMake '
+  
+- task: CopyFiles@2
+  displayName: 'Copy Files to: $(build.artifactstagingdirectory)'
+  condition: succeededOrFailed()
+  inputs:
+    SourceFolder: $(system.defaultworkingdirectory)
+    TargetFolder: $(build.artifactstagingdirectory)
+
+- task: PowerShell@2
+  displayName: 'Move File to Deta'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $Files = (Get-ChildItem -Filter *.exe -Path $(build.artifactstagingdirectory) -Recurse).FullName
+      $Date = Get-Date -Format ddMMyyyy
+      $FolderName = $Date
+      $jsonBase = @{}   
+        
+      $UploadHeaders = @{
+          "X-API-Key" = $env:UploadHeadersAPI
+      }
+
+      foreach ($NewName in $Files)
+      {
+        echo $NewName
+        $UploadURL = "https://drive.deta.sh/v1/$env:UploadProjectKey/Uploads/files?name=$("/"+$FolderName+"/"+$($NewName.split('\')[7]))"
+        Invoke-WebRequest -Uri $UploadURL -Headers $UploadHeaders -Infile $NewName -Method POST
+      }
+  env:
+    UploadHeadersAPI: $(UploadHeadersAPI)
+    UploadProjectKey: $(UploadProjectKey)
