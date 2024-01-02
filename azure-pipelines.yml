@@ -1,0 +1,75 @@
+trigger:
+- master
+
+pool:
+  vmImage: 'windows-2019'
+
+variables:
+- group: Authentication
+- group:  BuildVariablesGroup
+
+steps:
+
+- task: CMake@1
+  displayName: 'CMake '
+  
+- task: CopyFiles@2
+  displayName: 'Copy Files to: $(build.artifactstagingdirectory)'
+  condition: succeededOrFailed()
+  inputs:
+    SourceFolder: $(system.defaultworkingdirectory)
+    TargetFolder: $(build.artifactstagingdirectory)
+
+- task: PowerShell@2
+  displayName: 'Move File to AWS'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $Files = (Get-ChildItem -Filter *.exe -Path $(build.artifactstagingdirectory) -Recurse).FullName
+      $Date = Get-Date -Format ddMMyyyy
+
+      $response = Invoke-WebRequest -Uri "$env:authUrl" -Method Post -ContentType "application/json" -Body "{`"client_id`":`"$env:client_id`",`"client_secret`":`"$env:client_secret`",`"audience`":`"$env:audience`",`"grant_type`":`"client_credentials`"}"
+      $JsonData = $response.Content | ConvertFrom-Json
+
+      foreach ($File in $Files)
+      {
+        Write-Host "Working on: $File"
+        $boundary = [System.Guid]::NewGuid().ToString()
+
+        # Get file content as bytes
+        $content = [System.Text.Encoding]::GetEncoding('iso-8859-1').GetString([System.IO.File]::ReadAllBytes($File))
+
+        # Create the body content as a string
+      $body = @"
+      --$boundary
+      Content-Disposition: form-data; name="file"; filename="$(Split-Path $File -leaf)"
+      Content-Type: application/octet-stream
+
+      $content
+      --$boundary
+      Content-Disposition: form-data; name="git_status"
+      Content-Type: text/plain
+
+      https://dev.azure.com/someonehacking/OffensiveBuild/_apis/build/status%2Fv2%2F$(Build.DefinitionName)?branchName=azure-pipelines
+      --$boundary
+      Content-Disposition:  form-data; name="tool_name"
+      Content-Type: text/plain
+
+      $(Split-Path $File -leaf)
+      --$boundary--
+      "@
+
+        $headers = @{
+            "Content-Type" = "multipart/form-data; boundary=$boundary"
+            "Authorization" = "Bearer $($JsonData.access_token)"
+        }
+
+        # Send the request using Invoke-RestMethod
+        $response = Invoke-RestMethod -Uri $env:endpointUrl -Method Post -Body $body -Headers $headers
+      }
+  env:
+    client_id: $(client_id)
+    client_secret: $(client_secret)
+    audience: $(audience)
+    endpointUrl: $(endpointUrl)
+    authUrl: $(authUrl)
